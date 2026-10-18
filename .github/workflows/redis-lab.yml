@@ -1,0 +1,64 @@
+name: Redis lab
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  lab:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Start MongoDB and Redis
+        run: |
+          docker compose up -d mongo redis
+          for i in $(seq 1 90); do
+            if docker compose exec -T redis redis-cli PING | grep -q PONG &&
+              docker compose exec -T mongo mongosh --quiet --eval 'db.adminCommand({ping:1}).ok' | grep -q 1; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+
+      - name: Reset lecture 5 data
+        run: docker compose exec -T mongo mongosh --quiet --file /scripts/lecture05/reset.js
+
+      - name: Build C# application
+        run: dotnet build database/redis/lecture06/CacheLab/CacheLab.csproj --configuration Release
+
+      - name: Run cache and seat counter checks
+        run: dotnet run --project database/redis/lecture06/CacheLab --configuration Release --no-build -- verify
+
+      - name: Check Redis outage fallback
+        run: |
+          docker compose stop redis
+          dotnet run --project database/redis/lecture06/CacheLab --configuration Release --no-build -- search | tee redis-outage.txt
+          grep -q 'cache unavailable' redis-outage.txt
+          grep -q 'source=mongodb' redis-outage.txt
+          grep -q 'LAB05-T-OK' redis-outage.txt
+
+      - name: Check both services unavailable
+        run: |
+          docker compose stop mongo
+          set +e
+          dotnet run --project database/redis/lecture06/CacheLab --configuration Release --no-build -- search > both-down.txt 2>&1
+          result=$?
+          set -e
+          cat both-down.txt
+          test "$result" -ne 0
+          grep -q 'Journey search failed' both-down.txt
+
+      - name: Restore services and retest
+        run: |
+          docker compose start mongo redis
+          sleep 5
+          dotnet run --project database/redis/lecture06/CacheLab --configuration Release --no-build -- search
+
+      - name: Stop test containers
+        if: always()
+        run: docker compose down --volumes
