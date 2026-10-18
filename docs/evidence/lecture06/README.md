@@ -106,3 +106,17 @@ dotnet run --project database/redis/lecture06/CacheLab -- verify
 ```
 
 The GitHub Actions job is a second way to run the tests on an environment that has .NET and Docker. These notes describe the test method and expected observations; pass or fail should be taken from the actual command output.
+
+## Results from GitHub Actions, 18 October 2026
+
+I ran the exercise on a GitHub-hosted Ubuntu runner with .NET 8, MongoDB and Redis containers. [The first integration run](https://github.com/AhmadAmerBakran/mobilityticketing-lecture-6/actions/runs/39133970865) completed successfully.
+
+The first morning search took 7.5 ms using MongoDB. The repeated search took 2.2 ms from Redis without an additional MongoDB call. The empty evening search returned [] in both cases; the Redis hit took 0.3 ms. After the one-second expiry and 1.5-second wait, the next search used MongoDB again.
+
+All three invalid-value cases caused a new MongoDB lookup and cache replacement. The cancellation test showed LAB05-T-OK coming from the stale cache after MongoDB had been updated. Deleting the key changed the next response to []. The tests for key uniqueness, the Lua seat counter, and storing route and stop values also passed.
+
+Ten simultaneous searches caused **10 MongoDB calls** with the deliberate 200 ms delay. A search immediately afterward used Redis and did not increase the call count. I did not add the optional in-flight request coalescing, so this is the expected stampede behavior for the experiment.
+
+When Redis was stopped, the search still found LAB05-T-OK through MongoDB. That fallback search took **1864.8 ms**, despite the shorter configured Redis operation timeouts. With both services stopped, the program exited with `Journey search failed: MongoDB is unavailable.` After restarting the services, the search succeeded again and took 124.7 ms on that run.
+
+The timings are measurements from this CI runner, not fixed performance targets. The successful build and all test steps are visible in the linked workflow log.
